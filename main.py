@@ -1,19 +1,11 @@
 import streamlit as st
+import sqlite3
 from PIL import Image
-import subprocess
 
-
-try:
-    st.set_page_config(
-        page_title="CRISPAN SUITE & EVENT CENTER JOS",
-        layout="centered",
-        page_icon="icon.ico"  # Ensure this file exists in the working directory
-    )
-except Exception as e:
-    st.warning(f"Page icon could not be set. Error: {e}")
-# Data for menu items and their components
-menu_data = {
-    "BLACK TEA": {
+# Initialize session state for menu data if not already initialized
+if "menu_data" not in st.session_state:
+    st.session_state.menu_data = {
+        "BLACK TEA": {
         "Tea 2 GRAM": 117.00,
         "Brown Sugar 2 GRAM": 3.40,
     },
@@ -2299,43 +2291,77 @@ menu_data = {
 
 }
 
-# CSS for icons and styling
-st.markdown("""
-    <style>
-        /* General page styles */
-        .main { background-color: #f8f9fa; }
+# Function to connect to the SQLite database (or create it if it doesn't exist)
+def get_db_connection():
+    conn = sqlite3.connect('menu_data.db')
+    return conn
 
-        /* Header styles */
-        h1, h2, h3 { color: #2C3E50; font-family: 'Arial', sans-serif; }
+# Function to create the table if it doesn't exist
+def create_table():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS menu_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        menu_item TEXT NOT NULL,
+        component_name TEXT NOT NULL,
+        component_cost REAL NOT NULL
+    );
+    """
+    )
+    conn.commit()
+    conn.close()
 
-        /* General text color */
-        body, p, span, div { color: #2C3E50; }
+# Function to fetch all menu items from the database
+def fetch_menu_data():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT menu_item, component_name, component_cost FROM menu_items")
+    rows = cursor.fetchall()
+    conn.close()
 
-        /* Navigation icons */
-        .menu-icon { margin-right: 10px; }
+    # Format the data into a dictionary structure
+    menu_data = {}
+    for row in rows:
+        menu_item, component_name, component_cost = row
+        if menu_item not in menu_data:
+            menu_data[menu_item] = {}
+        menu_data[menu_item][component_name] = component_cost
+    return menu_data
 
-        /* Block container styling */
-        .block-container {
-            padding: 2rem 1rem;
-            max-width: 80%;
-            margin: auto;
-            background: #ffffff;
-            color: #2C3E50;
-            border-radius: 15px;
-            box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
-        }
+# Function to add or update a menu item in the database
+def add_or_update_menu_item(menu_item, component_name, component_cost):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT OR REPLACE INTO menu_items (menu_item, component_name, component_cost)
+    VALUES (?, ?, ?)
+    """, (menu_item, component_name, component_cost))
+    conn.commit()
+    conn.close()
 
-        /* Sidebar styling */
-        .css-1d391kg { background-color: #1E3A8A; color: white; }
-        .css-1d391kg h2 { color: white; }
+# Function to delete a menu item from the database
+def delete_menu_item(menu_item):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM menu_items WHERE menu_item = ?", (menu_item,))
+    conn.commit()
+    conn.close()
 
-        /* Button styling */
-        button { border-radius: 5px; background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; border: none; }
-        button:hover { background-color: #45a049; }
-    </style>
-""", unsafe_allow_html=True)
+# Initialize the database and table
+create_table()
 
+# Fetch the menu data from the database
+menu_data = fetch_menu_data()
 
+try:
+    st.set_page_config(
+        page_title="CRISPAN SUITE & EVENT CENTER JOS",
+        layout="centered",
+        page_icon="icon.ico"  # Ensure this file exists in the working directory
+    )
+except Exception as e:
+    st.warning(f"Page icon could not be set. Error: {e}")
 
 # App Header
 st.image("LOGO.png", use_container_width=True)
@@ -2347,7 +2373,8 @@ st.sidebar.title("Navigation")
 menu_options = [
     "📊 Calculate Menu Cost",
     "🛠️ Manage Menu Cost",
-    "📜 View Menu Cost List"
+    "📜 View Menu Cost List",
+    "❌ Delete Menu Item"
 ]
 selected_option = st.sidebar.radio("Choose an action:", menu_options)
 
@@ -2359,7 +2386,7 @@ if selected_option == "📊 Calculate Menu Cost":
     search_query = st.text_input("Search for a Menu Item").strip().lower()
 
     # Filter menu items based on search query
-    filtered_menu_items = [item for item in menu_data.keys() if search_query in item.lower()]
+    filtered_menu_items = [item for item in st.session_state.menu_data.keys() if search_query in item.lower()]
 
     # Menu item dropdown with filtered results
     if filtered_menu_items:
@@ -2370,7 +2397,7 @@ if selected_option == "📊 Calculate Menu Cost":
 
     # Calculate and display BOM details
     if selected_menu:
-        components = menu_data.get(selected_menu, {})
+        components = st.session_state.menu_data.get(selected_menu, {})
         total_cost = sum(components.values())
 
         st.write(f"### Menu Cost for {selected_menu}")
@@ -2384,35 +2411,89 @@ if selected_option == "📊 Calculate Menu Cost":
 # Functionality: Manage BOM
 if selected_option == "🛠️ Manage Menu Cost":
     st.header("🛠️ Manage Menu Costing")
-    st.markdown("Use the fields below to add or update a menu item and its components.")
+    st.markdown("Use the fields below to add, update, or create a new menu item and its components.")
 
-    # Input fields for managing BOM
-    menu_item = st.text_input("Menu Item")
-    component_name = st.text_input("Component Name")
-    component_cost = st.text_input("Cost (₦)")
+    # Input fields for adding new menu items
+    new_menu_item = st.text_input("Enter New Menu Item")
+    new_component_name = st.text_input("Enter New Component Name")
+    new_component_cost = st.text_input("Enter Component Cost (₦)")
 
-    if st.button("Add/Update Cost"):
-        if menu_item and component_name and component_cost:
+    if st.button("Add New Menu Item"):
+        if new_menu_item and new_component_name and new_component_cost:
             try:
-                component_cost = float(component_cost)
-                if menu_item not in menu_data:
-                    menu_data[menu_item] = {}
-                menu_data[menu_item][component_name] = component_cost
-                st.success(f"Component '{component_name}' added/updated for '{menu_item}'.")
+                new_component_cost = float(new_component_cost)
+                # Add new menu item to session state and database
+                if new_menu_item not in st.session_state.menu_data:
+                    st.session_state.menu_data[new_menu_item] = {}
+                st.session_state.menu_data[new_menu_item][new_component_name] = new_component_cost
+
+                add_or_update_menu_item(new_menu_item, new_component_name, new_component_cost)
+                st.success(f"New menu item '{new_menu_item}' with component '{new_component_name}' added successfully.")
+            except ValueError:
+                st.error("Component cost must be a numeric value.")
+        else:
+            st.error("All fields are required to add a new menu item.")
+
+    # Dropdown to select a menu item
+    selected_menu_item = st.selectbox("Select an Existing Menu Item to Update", [""] + list(st.session_state.menu_data.keys()))
+
+    # Dynamically populate the components dropdown
+    if selected_menu_item:
+        components = st.session_state.menu_data[selected_menu_item]
+        selected_component = st.selectbox("Select a Component", [""] + list(components.keys()))
+        component_cost = components.get(selected_component, "")
+    else:
+        selected_component = ""
+        component_cost = ""
+
+    # Input fields for updating components
+    menu_item = st.text_input("Menu Item", value=selected_menu_item or "")
+    component_name = st.text_input("Component Name", value=selected_component or "")
+    component_cost_input = st.text_input("Cost (₦)", value=str(component_cost) if component_cost else "")
+
+    if st.button("Update Cost"):
+        if menu_item and component_name and component_cost_input:
+            try:
+                component_cost_input = float(component_cost_input)
+                # Add or update menu item in the session state and database
+                if menu_item not in st.session_state.menu_data:
+                    st.session_state.menu_data[menu_item] = {}
+                st.session_state.menu_data[menu_item][component_name] = component_cost_input
+
+                add_or_update_menu_item(menu_item, component_name, component_cost_input)
+                st.success(f"Component '{component_name}' updated for '{menu_item}'.")
             except ValueError:
                 st.error("Cost must be a numeric value.")
         else:
-            st.error("All fields are required.")
+            st.error("All fields are required to update the cost.")
 
 # Functionality: View BOM List
 if selected_option == "📜 View Menu Cost List":
     st.header("📜 View Menu Cost of Materials")
     st.markdown("Below is a list of all menu items and their components.")
 
-    for menu, components in menu_data.items():
+    for menu, components in st.session_state.menu_data.items():
         st.subheader(menu)
         for item, cost in components.items():
             st.write(f"- {item}: ₦{cost:.2f}")
+
+# Functionality: Delete Menu Item
+if selected_option == "❌ Delete Menu Item":
+    st.header("❌ Delete Menu Item")
+    st.markdown("Select a menu item to delete it permanently from the database.")
+
+    menu_to_delete = st.selectbox("Select a Menu Item to Delete", [""] + list(st.session_state.menu_data.keys()))
+
+    if st.button("Delete Menu Item"):
+        if menu_to_delete:
+            # Delete the menu item from session state and database
+            if menu_to_delete in st.session_state.menu_data:
+                del st.session_state.menu_data[menu_to_delete]
+
+            delete_menu_item(menu_to_delete)
+            st.success(f"Menu item '{menu_to_delete}' deleted successfully.")
+        else:
+            st.error("Please select a menu item to delete.")
 
 # Footer
 st.markdown("---")
